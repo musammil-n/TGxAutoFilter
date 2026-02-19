@@ -1,3 +1,4 @@
+
 from pyrogram import Client, filters
 import datetime
 import time
@@ -60,3 +61,4 @@ async def broadcast(bot, message):
         f"Broadcast Completed in {time_taken}.\n\nTotal Users: {total_users}\n"
         f"Success: {success} | Blocked: {blocked} | Deleted: {deleted} | Failed: {failed}"
     )
+    
