@@ -177,6 +177,11 @@ else:
         collection = SqlCollection()
 
         @staticmethod
+        async def ensure_indexes():
+            await _ensure_media_table()
+            return True
+
+        @staticmethod
         async def count_documents(filter_=None):
             rows = await SqlCursor(filter_ or {}, as_docs=False).to_list(length=1000000)
             return len(rows)
