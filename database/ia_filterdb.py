@@ -193,23 +193,7 @@ async def save_file(media):
 
     if USE_SQLDB:
         try:
-            if not USE_LIBSQL:
-                # ensure table in sqlite mode during startup/import compatibility
-                with get_conn() as conn:
-                    conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS media (
-                            file_id TEXT PRIMARY KEY,
-                            file_ref TEXT,
-                            file_name TEXT NOT NULL,
-                            file_size INTEGER NOT NULL,
-                            file_type TEXT,
-                            mime_type TEXT,
-                            caption TEXT
-                        )
-                        """
-                    )
-                    conn.commit()
+            await _ensure_media_table()
             await db_execute(
                 "INSERT INTO media(file_id, file_ref, file_name, file_size, file_type, mime_type, caption) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (

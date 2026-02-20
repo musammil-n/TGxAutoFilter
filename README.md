@@ -107,6 +107,7 @@
 > Current SQL backend in this repository runs on SQLite engine (`sqlite:///...`).  
 > You can use direct Turso URL in `SQLDB` / `TURSO_DATABASE_URL` (example: `libsql://your-db.turso.io`).  
 > Make sure `TURSO_AUTH_TOKEN` is set in Koyeb environment variables and dependencies are installed from `requirements.txt`.
+> If Turso DNS/network is temporarily unavailable, bot now auto-falls back to local sqlite runtime DB (`data/turso_fallback.db`) instead of crashing.
 
 1. **Create Turso database**
    - Install and login to Turso CLI.

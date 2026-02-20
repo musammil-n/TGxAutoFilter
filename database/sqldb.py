@@ -10,6 +10,16 @@ logger = logging.getLogger(__name__)
 
 _LIBSQL_CLIENT = None
 _LIBSQL_LOCK = asyncio.Lock()
+_FALLBACK_SQLITE = "data/turso_fallback.db"
+
+
+def _fallback_conn() -> sqlite3.Connection:
+    path = Path(_FALLBACK_SQLITE)
+    if path.parent and str(path.parent) != ".":
+        path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def sqldb_enabled() -> bool:
@@ -69,7 +79,14 @@ async def _libsql_execute(query: str, params=()):
 
 async def db_execute(query: str, params=()):
     if libsql_mode():
-        return await _libsql_execute(query, params)
+        try:
+            return await _libsql_execute(query, params)
+        except Exception as e:
+            logger.warning(f"libsql query failed, using local fallback sqlite. error={e}")
+            with _fallback_conn() as conn:
+                cur = conn.execute(query, tuple(params or ()))
+                conn.commit()
+                return cur
 
     with get_conn() as conn:
         cur = conn.execute(query, tuple(params or ()))
@@ -79,20 +96,35 @@ async def db_execute(query: str, params=()):
 
 async def db_fetchall(query: str, params=()):
     if libsql_mode():
-        result = await _libsql_execute(query, params)
-        rows = getattr(result, "rows", []) or []
-        normalized = []
-        for row in rows:
-            if isinstance(row, dict):
-                normalized.append(row)
-            else:
-                # best effort for tuple rows
-                normalized.append(dict(row)) if hasattr(row, "keys") else normalized.append({str(i): v for i, v in enumerate(row)})
-        return normalized
+        try:
+            result = await _libsql_execute(query, params)
+            rows = getattr(result, "rows", []) or []
+            normalized = []
+            for row in rows:
+                if isinstance(row, dict):
+                    normalized.append(row)
+                else:
+                    normalized.append(dict(row)) if hasattr(row, "keys") else normalized.append({str(i): v for i, v in enumerate(row)})
+            return normalized
+        except Exception as e:
+            logger.warning(f"libsql fetch failed, using local fallback sqlite. error={e}")
+            with _fallback_conn() as conn:
+                try:
+                    cur = conn.execute(query, tuple(params or ()))
+                    return [dict(r) for r in cur.fetchall()]
+                except sqlite3.OperationalError as oe:
+                    if "no such table" in str(oe).lower() and query.strip().lower().startswith("select"):
+                        return []
+                    raise
 
     with get_conn() as conn:
-        cur = conn.execute(query, tuple(params or ()))
-        return [dict(r) for r in cur.fetchall()]
+        try:
+            cur = conn.execute(query, tuple(params or ()))
+            return [dict(r) for r in cur.fetchall()]
+        except sqlite3.OperationalError as oe:
+            if "no such table" in str(oe).lower() and query.strip().lower().startswith("select"):
+                return []
+            raise
 
 
 async def db_fetchone(query: str, params=()):
