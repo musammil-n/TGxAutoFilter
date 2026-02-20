@@ -12,6 +12,7 @@ from info import (
     PROTECT_CONTENT,
     SINGLE_BUTTON,
     SPELL_CHECK_REPLY,
+    TURSO_MAX_DB_BYTES,
 )
 from database.sqldb import db_execute, db_fetchall, db_fetchone, get_conn, libsql_mode, sqldb_enabled
 
@@ -224,11 +225,19 @@ class Database:
         if not self.use_sql:
             return (await self.db.command('dbstats'))['dataSize']
         if self.use_libsql:
-            return 0
+            # Turso/libsql currently doesn't expose dbstats in this project.
+            # Returning None lets callers display the configured plan capacity
+            # without pretending usage is known.
+            return None
         with get_conn() as conn:
             page_count = conn.execute("PRAGMA page_count").fetchone()[0]
             page_size = conn.execute("PRAGMA page_size").fetchone()[0]
             return int(page_count) * int(page_size)
+
+    async def get_db_limit(self):
+        if self.use_libsql:
+            return int(TURSO_MAX_DB_BYTES)
+        return 512 * 1024 * 1024
 
 
 db = Database(DATABASE_URI, DATABASE_NAME)

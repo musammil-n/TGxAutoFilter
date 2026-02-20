@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sqlite3
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -11,6 +12,18 @@ logger = logging.getLogger(__name__)
 _LIBSQL_CLIENT = None
 _LIBSQL_LOCK = asyncio.Lock()
 _FALLBACK_SQLITE = "data/turso_fallback.db"
+_LAST_LIBSQL_WARNING = {"query": 0.0, "fetch": 0.0}
+_WARNING_INTERVAL = 60.0
+
+
+def _log_libsql_fallback(kind: str, error: Exception) -> None:
+    now = time.monotonic()
+    last = _LAST_LIBSQL_WARNING.get(kind, 0.0)
+    if now - last >= _WARNING_INTERVAL:
+        _LAST_LIBSQL_WARNING[kind] = now
+        logger.warning(f"libsql {kind} failed, using local fallback sqlite. error={error}")
+    else:
+        logger.debug(f"libsql {kind} failed again, still using fallback sqlite. error={error}")
 
 
 def _fallback_conn() -> sqlite3.Connection:
@@ -82,7 +95,7 @@ async def db_execute(query: str, params=()):
         try:
             return await _libsql_execute(query, params)
         except Exception as e:
-            logger.warning(f"libsql query failed, using local fallback sqlite. error={e}")
+            _log_libsql_fallback("query", e)
             with _fallback_conn() as conn:
                 cur = conn.execute(query, tuple(params or ()))
                 conn.commit()
@@ -107,7 +120,7 @@ async def db_fetchall(query: str, params=()):
                     normalized.append(dict(row)) if hasattr(row, "keys") else normalized.append({str(i): v for i, v in enumerate(row)})
             return normalized
         except Exception as e:
-            logger.warning(f"libsql fetch failed, using local fallback sqlite. error={e}")
+            _log_libsql_fallback("fetch", e)
             with _fallback_conn() as conn:
                 try:
                     cur = conn.execute(query, tuple(params or ()))
