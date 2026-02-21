@@ -1,3 +1,4 @@
+import shutil
 # Kanged From @TroJanZheX
 #hyper link mode by mn-bots
 import asyncio
@@ -10,7 +11,7 @@ import pyrogram
 from database.connections_mdb import active_connection, all_connections, delete_connection, if_active, make_active, \
     make_inactive
 from info import ADMINS, AUTH_USERS, CUSTOM_FILE_CAPTION, AUTH_GROUPS, P_TTI_SHOW_OFF, IMDB, \
-    SINGLE_BUTTON, SPELL_CHECK_REPLY, IMDB_TEMPLATE
+    SINGLE_BUTTON, SPELL_CHECK_REPLY, IMDB_TEMPLATE, DATABASE_URI
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait, UserIsBlocked, MessageNotModified, PeerIdInvalid
@@ -578,7 +579,10 @@ async def cb_handler(client: Client, query: CallbackQuery):
         users = await db.total_users_count()
         chats = await db.total_chat_count()
         monsize = await db.get_db_size()
-        free = 536870912 - monsize
+        if DATABASE_URI:
+            free = max(0, 536870912 - monsize)
+        else:
+            _, _, free = shutil.disk_usage(".")
         monsize = get_size(monsize)
         free = get_size(free)
         await query.message.edit_text(
@@ -587,7 +591,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
             parse_mode=enums.ParseMode.HTML
         )
     elif query.data == "rfrsh":
-        await query.answer("Fetching MongoDb DataBase")
+        await query.answer("Refreshing database stats")
         buttons = [[
             InlineKeyboardButton('ʙᴀᴄᴋ', callback_data='help'),
             InlineKeyboardButton('♻️', callback_data='rfrsh'),
@@ -598,7 +602,10 @@ async def cb_handler(client: Client, query: CallbackQuery):
         users = await db.total_users_count()
         chats = await db.total_chat_count()
         monsize = await db.get_db_size()
-        free = 536870912 - monsize
+        if DATABASE_URI:
+            free = max(0, 536870912 - monsize)
+        else:
+            _, _, free = shutil.disk_usage(".")
         monsize = get_size(monsize)
         free = get_size(free)
         await query.message.edit_text(

@@ -226,7 +226,9 @@ class Database:
     async def get_db_size(self):
         if self.use_mongo:
             return (await self.db.command("dbstats"))['dataSize']
-        return 0
+        with store.engine.begin() as conn:
+            size = conn.execute(text("SELECT pg_database_size(current_database())")).scalar()
+            return int(size or 0)
 
 
 db = Database(DATABASE_URI, DATABASE_NAME)
