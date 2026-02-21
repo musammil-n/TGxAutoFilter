@@ -23,7 +23,7 @@ BATCH_SIZE      = 5000    # IDs enqueued per producer iteration
 TG_CHUNK        = 200     # Telegram API hard max per get_messages call
 FETCH_WORKERS   = 4       # concurrent get_messages calls (tune: 3–6)
 SAVE_WORKERS    = 8       # concurrent save_file calls
-PROGRESS_EVERY  = 300.0     # seconds between status-message edits
+PROGRESS_EVERY  = 60.0     # seconds between status-message edits
 QUEUE_MAXSIZE   = 10      # max pending batches between producer and consumer
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -59,23 +59,55 @@ async def _safe_edit(msg, text, reply_markup=None):
         pass
 
 
-async def _flood_safe(coro):
-    """Retry a coroutine transparently on FloodWait."""
+async def _flood_safe(coro, _max_retries: int = 10, status_msg=None):
+    """
+    Retry a coroutine transparently on:
+      • FloodWait  – edit status_msg with countdown, sleep, then auto-resume
+      • OSError / ConnectionError (Connection lost, etc.) – exponential backoff
+    """
+    attempt = 0
     while True:
         try:
             return await coro
         except FloodWait as fw:
-            logger.warning("FloodWait – sleeping %ss", fw.value)
-            await asyncio.sleep(fw.value + 1)
+            wait_sec = fw.value + 1
+            logger.warning("FloodWait – sleeping %ss", wait_sec)
+            if status_msg is not None:
+                await _safe_edit(
+                    status_msg,
+                    f"⏳ <b>FloodWait!</b>\n\n"
+                    f"Telegram asked us to slow down.\n"
+                    f"Sleeping <code>{wait_sec}s</code> – indexing will "
+                    f"<b>resume automatically</b> afterwards."
+                )
+            await asyncio.sleep(wait_sec)
+            if status_msg is not None:
+                await _safe_edit(
+                    status_msg,
+                    "⚡ <b>Resuming indexing…</b>\n\nFloodWait is over.",
+                )
+        except (OSError, ConnectionError, asyncio.TimeoutError) as e:
+            attempt += 1
+            if attempt > _max_retries:
+                logger.error("Giving up after %d retries: %s", _max_retries, e)
+                raise
+            delay = min(2 ** attempt + random.uniform(0, 1), 60)
+            logger.warning(
+                "Connection error (%s) – retry %d/%d in %.1fs",
+                e, attempt, _max_retries, delay
+            )
+            await asyncio.sleep(delay)
 
 
 # ─── stage 1 : producer  (fetch) ─────────────────────────────────────────────
 
 async def _fetch_worker(bot, chat, id_queue: asyncio.Queue,
-                        msg_queue: asyncio.Queue, sem: asyncio.Semaphore):
+                        msg_queue: asyncio.Queue, sem: asyncio.Semaphore,
+                        status_msg=None):
     """
     Pull a chunk of IDs from *id_queue*, fetch the messages, push the list
     onto *msg_queue*. Runs FETCH_WORKERS copies concurrently.
+    status_msg is the Telegram message used to show FloodWait notices.
     """
     while True:
         chunk_ids = await id_queue.get()
@@ -85,10 +117,19 @@ async def _fetch_worker(bot, chat, id_queue: asyncio.Queue,
             return
         try:
             async with sem:
-                messages = await _flood_safe(bot.get_messages(chat, chunk_ids))
+                messages = await _flood_safe(
+                    bot.get_messages(chat, chunk_ids),
+                    status_msg=status_msg,
+                )
             if not isinstance(messages, list):
                 messages = [messages]
             await msg_queue.put(messages)
+        except (OSError, ConnectionError, asyncio.TimeoutError) as e:
+            # _flood_safe exhausted retries – log and skip this chunk rather
+            # than crashing the whole worker.
+            logger.error("Fetch permanently failed for chunk (ids %s…): %s",
+                         chunk_ids[:3], e)
+            await msg_queue.put([])    # push empty so consumer doesn't stall
         except Exception as e:
             logger.exception("Fetch error: %s", e)
             await msg_queue.put([])    # push empty so consumer doesn't stall
@@ -170,7 +211,8 @@ async def index_files_to_db(lst_msg_id: int, chat, msg, bot):
             # ── start fetch workers ───────────────────────────────────────────
             workers = [
                 asyncio.create_task(
-                    _fetch_worker(bot, chat, id_queue, msg_queue, sem)
+                    _fetch_worker(bot, chat, id_queue, msg_queue, sem,
+                                  status_msg=msg)
                 )
                 for _ in range(FETCH_WORKERS)
             ]
