@@ -21,7 +21,7 @@ lock = asyncio.Lock()
 # ─── tunables ────────────────────────────────────────────────────────────────
 BATCH_SIZE      = 5000    # IDs enqueued per producer iteration
 TG_CHUNK        = 200     # Telegram API hard max per get_messages call
-FETCH_WORKERS   = 4       # concurrent get_messages calls (tune: 3–6)
+FETCH_WORKERS   = 1       # sequential fetch: next chunk starts after previous completes
 SAVE_WORKERS    = 8       # concurrent save_file calls
 PROGRESS_EVERY  = 60.0    # seconds between status-message edits
 QUEUE_MAXSIZE   = 10      # max pending batches between producer and consumer
