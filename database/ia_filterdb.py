@@ -177,7 +177,8 @@ if USE_MONGO:
     if not _mongo_collections:
         raise RuntimeError("At least one MongoDB URI is required when DATABASE_URI mode is enabled")
 
-    logger.info("Media DB shards enabled: %d", len(_mongo_collections))
+    MONGO_SHARD_COUNT = len(_mongo_collections)
+    logger.info("Media DB shards enabled: %d", MONGO_SHARD_COUNT)
 
     class MongoUnionCursor:
         def __init__(self, query=None, projection=None):
@@ -203,11 +204,25 @@ if USE_MONGO:
             requested = self._limit if self._limit is not None else length
             per_shard_limit = self._skip + requested if requested is not None else None
 
+            if MONGO_SHARD_COUNT == 1:
+                cursor = _mongo_collections[0].find(self.query, self.projection)
+                if self._sort:
+                    field, direction = self._sort
+                    sort_field = 'created_at' if field == '$natural' else field
+                    cursor = cursor.sort(sort_field, direction)
+                if self._skip:
+                    cursor = cursor.skip(self._skip)
+                if requested is not None:
+                    cursor = cursor.limit(requested)
+                docs = await cursor.to_list(length=requested)
+                return [SQLMediaDoc(d) for d in docs]
+
             async def _fetch(col):
                 cursor = col.find(self.query, self.projection)
                 if self._sort:
                     field, direction = self._sort
-                    cursor = cursor.sort(field, direction)
+                    sort_field = 'created_at' if field == '$natural' else field
+                    cursor = cursor.sort(sort_field, direction)
                 if per_shard_limit is not None:
                     cursor = cursor.limit(per_shard_limit)
                 docs = await cursor.to_list(length=per_shard_limit)
@@ -264,7 +279,10 @@ if USE_MONGO:
 
         @staticmethod
         async def count_documents(query=None):
-            counts = await asyncio.gather(*[col.count_documents(query or {}) for col in _mongo_collections])
+            q = query or {}
+            if MONGO_SHARD_COUNT == 1:
+                return await _mongo_collections[0].count_documents(q)
+            counts = await asyncio.gather(*[col.count_documents(q) for col in _mongo_collections])
             return sum(counts)
 
         @staticmethod
@@ -377,6 +395,15 @@ async def get_search_results(query, file_type=None, max_results=10, offset=0, fi
     if file_type:
         filter['file_type'] = file_type
 
+    if MONGO_SHARD_COUNT == 1:
+        col = _mongo_collections[0]
+        total_results = await col.count_documents(filter)
+        next_offset = offset + max_results
+        if next_offset >= total_results:
+            next_offset = ''
+        docs = await col.find(filter).sort('created_at', -1).skip(offset).limit(max_results).to_list(length=max_results)
+        return [SQLMediaDoc(d) for d in docs], next_offset, total_results
+
     count_tasks = [col.count_documents(filter) for col in _mongo_collections]
     total_results = sum(await asyncio.gather(*count_tasks))
     next_offset = offset + max_results
@@ -399,6 +426,9 @@ async def get_search_results(query, file_type=None, max_results=10, offset=0, fi
 
 async def get_file_details(query):
     filter = {'_id': query}
+    if MONGO_SHARD_COUNT == 1:
+        filedetails = await _mongo_collections[0].find(filter).limit(1).to_list(length=1)
+        return [SQLMediaDoc(filedetails[0])] if filedetails else []
     for col in _mongo_collections:
         filedetails = await col.find(filter).limit(1).to_list(length=1)
         if filedetails:
