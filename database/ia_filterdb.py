@@ -274,6 +274,7 @@ if USE_MONGO:
             for col in _mongo_collections:
                 tasks.append(col.create_index([('file_name', 1)]))
                 tasks.append(col.create_index([('created_at', -1)]))
+                tasks.append(col.create_index([('_id', 1)], unique=True))
             await asyncio.gather(*tasks)
 
         @staticmethod
